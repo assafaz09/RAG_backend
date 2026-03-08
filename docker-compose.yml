@@ -4,6 +4,8 @@ services:
     build: .
     ports:
       - "8000:8000"
+    volumes:
+      - .:/app
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - QDRANT_URL=http://qdrant:6333
