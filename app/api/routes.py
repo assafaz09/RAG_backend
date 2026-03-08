@@ -10,7 +10,6 @@ import uuid
 
 router = APIRouter()
 
-
 @router.post("/ingest")
 async def ingest(req: IngestRequest):
     try:
@@ -19,10 +18,8 @@ async def ingest(req: IngestRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @router.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
-    """Upload and ingest a file (PDF, DOCX, TXT, MD)."""
     try:
         content = await file.read()
         text, _ = parse_file(content, file.filename)
@@ -41,13 +38,10 @@ async def upload_file(file: UploadFile = File(...)):
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Upload failed: {str(e)}")
 
-
 @router.get("/documents")
 async def list_documents():
-    """List all ingested documents."""
     from app.db.vector_db import get_qdrant_client
     from app.core.config import settings
-    
     try:
         client = get_qdrant_client()
         collection_info = client.get_collection(collection_name=settings.QDRANT_COLLECTION)
@@ -55,45 +49,51 @@ async def list_documents():
         results = client.scroll(collection_name=settings.QDRANT_COLLECTION, limit=100)
         filenames = set()
         for point in results[0]:
-            if hasattr(point.payload, '__getitem__'):
-                fname = point.payload.get("filename", "unknown")
-            else:
-                fname = getattr(point.payload, "filename", "unknown")
+            fname = point.payload.get("filename", "unknown") if point.payload else "unknown"
             filenames.add(fname)
         return {"total_points": count, "documents": sorted(list(filenames))}
     except Exception as e:
         return {"total_points": 0, "documents": [], "error": str(e)}
 
-@router.post("/query", response_model=QueryResponse)
-async def query(req: QueryRequest):
-    # 1. יצירת ווקטור לשאלה
-    vectors = embed_texts([req.question])
-    if not vectors or len(vectors) == 0:
-        raise HTTPException(status_code=400, detail="Embedding failed")
-    
-    # 2. חיפוש ב-Qdrant
-    hits = retrieve(vectors[0], top_k=req.top_k)
-    
-    print(f"DEBUG: Found {len(hits)} hits. Top score: {hits[0].score if hits else 'N/A'}")
-    
-    relevant_texts = []
-    for i, h in enumerate(hits):
-        # וידוא שה-payload קיים והמפתח text קיים
-        text_chunk = h.payload.get('text') if h.payload else None
-        if text_chunk:
-            print(f"Hit {i} (Score: {h.score}): {text_chunk[:50]}...")
-            relevant_texts.append(text_chunk)
+@router.post("/query")
+async def query(request: QueryRequest):
+    try:
+        # 0. DEBUG - בוא נראה מה קיבלנו מהמשתמש
+        print(f"DEBUG: Received request: {request}")
+        
+        # במידה והשדה ב-Schema שלך נקרא 'question' ולא 'query', שנה כאן:
+        user_query = getattr(request, 'query', getattr(request, 'question', None))
+        
+        if not user_query:
+            raise ValueError("No query or question found in request body")
 
-    # 3. בניית הקונטקסט
-    context = "\n\n".join(relevant_texts)
-    
-    if not context.strip():
-        print("DEBUG: No context found for this query.")
-        return QueryResponse(answer="Sorry, I couldn't find relevant information in the uploaded documents.", sources=[])
+        # 1. יצירת Embedding
+        query_vectors = embed_texts([user_query])
+        query_vector = query_vectors[0]
+        
+        # 2. שליפת מידע
+        # שים לב: לפי הלוגים Retrieval עובד ומצא 5 hits!
+        hits = retrieve(query_vector, top_k=request.top_k if hasattr(request, 'top_k') else 5)
+        
+        print(f"DEBUG: Successfully found {len(hits)} hits.")
+        
+        # 3. בניית קונטקסט
+        context = "\n---\n".join(hits) if hits else "No relevant context found."
+        
+        # 4. יצירת תשובה
+        system_prompt = "You are a helpful assistant. Use the provided context to answer the user's question."
+        user_prompt = f"Context:\n{context}\n\nQuestion: {user_query}"
+        
+        response_text = generate_answer(system_prompt, user_prompt)
+        
+        return {
+            "answer": response_text,
+            "context_used": hits
+        }
 
-    # 4. הדפסת הקונטקסט שנשלח ל-AI (כדי שתוכל לראות בטרמינל)
-    print(f"DEBUG: Sending context to LLM (Length: {len(context)})")
-
-    # 5. יצירת תשובה
-    answer = generate_answer(req.question, context)
-    return QueryResponse(answer=answer, sources=[str(h.id) for h in hits])
+    except Exception as e:
+        print(f"ERROR in /query endpoint: {e}")
+        # הדפסת ה-Traceback המלאה כדי לראות בדיוק איפה זה קורס
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))

@@ -1,26 +1,38 @@
-from typing import List
-from app.db.vector_db import get_qdrant_client  # חסר היה
+from app.db.vector_db import get_qdrant_client
 from app.core.config import settings
 
-def retrieve(query_vector: List[float], top_k: int = 5):
+def retrieve(query_vector: list[float], top_k: int = 5):
     client = get_qdrant_client()
+    
     try:
-        # הדפסת דיבאג לוודא שהגענו לכאן
-        print(f"DEBUG: Searching Qdrant collection: {settings.QDRANT_COLLECTION}")
+        print(f"DEBUG: Executing retrieval on {settings.QDRANT_COLLECTION}")
         
-        hits = client.search(
+        # שימוש ב-query_points שהיא המתודה החדשה והיציבה יותר בגרסאות 1.10+
+        # היא מחליפה את search ומיועדת בדיוק למקרים כאלו
+        response = client.query_points(
             collection_name=settings.QDRANT_COLLECTION,
-            query_vector=query_vector,
+            query=query_vector,
             limit=top_k,
             with_payload=True
         )
         
-        # הדפסה של מה שמצאנו (או לא מצאנו)
-        print(f"DEBUG: Qdrant returned {len(hits)} hits")
-        for i, hit in enumerate(hits):
-            print(f"DEBUG: Hit {i} - Score: {hit.score}")
-            
-        return hits
+        # חילוץ הטקסט מהנקודות שחזרו
+        results = [hit.payload.get("text", "") for hit in response.points if hit.payload]
+        print(f"DEBUG: Successfully found {len(results)} hits")
+        return results
+
     except Exception as e:
-        print(f"DEBUG: !! Qdrant Search Error: {str(e)}")
-        return []
+        print(f"DEBUG: query_points failed, trying manual search: {e}")
+        try:
+            # ניסיון אחרון עם קריאה דינמית למתודה
+            search_method = getattr(client, "search")
+            hits = search_method(
+                collection_name=settings.QDRANT_COLLECTION,
+                query_vector=query_vector,
+                limit=top_k,
+                with_payload=True
+            )
+            return [hit.payload.get("text", "") for hit in hits if hit.payload]
+        except Exception as final_e:
+            print(f"DEBUG: !! All retrieval attempts failed: {final_e}")
+            return []
