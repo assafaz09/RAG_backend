@@ -93,7 +93,6 @@ async def query(request: QueryRequest):
 
     except Exception as e:
         print(f"ERROR in /query endpoint: {e}")
-        # הדפסת ה-Traceback המלאה כדי לראות בדיוק איפה זה קורס
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
