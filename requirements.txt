@@ -8,3 +8,8 @@ pypdf>=4.0.0
 python-docx>=0.8.11
 aiofiles>=23.0.0
 python-multipart>=0.0.6
+pillow
+pymupdf
+langgraph
+langchain-openai
+mcp

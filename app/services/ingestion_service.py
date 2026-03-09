@@ -2,8 +2,8 @@ from qdrant_client.http.models import PointStruct
 from typing import List, Dict
 import uuid
 from app.services.embedding_service import embed_texts
-from app.db.vector_db import get_qdrant_client  # חסר היה
-from app.core.config import settings                # חסר היה
+from app.db.vector_db import get_qdrant_client
+from app.core.config import settings
 
 def ingest_documents(docs: List[Dict]):
     if not docs:
@@ -12,7 +12,6 @@ def ingest_documents(docs: List[Dict]):
     texts = [d["text"] for d in docs]
     vectors = embed_texts(texts)
     
-    # עכשיו הפונקציה הזו מוכרת לקוד
     client = get_qdrant_client()
     
     points = []
@@ -30,7 +29,6 @@ def ingest_documents(docs: List[Dict]):
         ))
     
     try:
-        # עכשיו settings מוכר לקוד
         client.upsert(
             collection_name=settings.QDRANT_COLLECTION,
             points=points

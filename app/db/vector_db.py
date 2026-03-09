@@ -1,5 +1,5 @@
 import qdrant_client
-from qdrant_client import QdrantClient # שורה זו פותרת את השגיאה שלך!
+from qdrant_client import QdrantClient 
 from qdrant_client.http import models as rest
 from app.core.config import settings
 from typing import Any, Optional
@@ -9,7 +9,7 @@ _client: Optional[QdrantClient] = None
 def get_qdrant_client() -> QdrantClient:
     global _client
     if _client is None:
-        # אתחול הלקוח
+       
         _client = QdrantClient(
             url=settings.QDRANT_URL, 
             api_key=settings.QDRANT_API_KEY

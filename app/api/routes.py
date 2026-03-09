@@ -1,12 +1,19 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File
+from app.db.vector_db import get_qdrant_client
 from app.schemas.schemas import IngestRequest, QueryRequest, QueryResponse
 from app.services.ingestion_service import ingest_documents
 from app.services.embedding_service import embed_texts
+from app.services.embedding_service import generate_embedding
 from app.services.retrieval_service import retrieve
 from app.services.llm_service import generate_answer
 from app.utils.file_parser import parse_file
 from app.utils.chunking import chunk_text
-import uuid
+from app.services.vision_service import process_image_for_rag
+from app.core.config import settings
+from qdrant_client.http.models import PointStruct
+from uuid import uuid4
+import os
+import fitz  
 
 router = APIRouter()
 
@@ -18,30 +25,99 @@ async def ingest(req: IngestRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
+
 @router.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
+    print(f"\n🚀 DEBUG START: Processing file: {file.filename}")
+    
     try:
-        content = await file.read()
-        text, _ = parse_file(content, file.filename)
-        chunks = chunk_text(text, chunk_size=500, overlap=50)
-        docs = []
-        for i, chunk in enumerate(chunks):
-            doc_id = f"{file.filename}_{i}_{uuid.uuid4()}"
-            docs.append({
-                "id": doc_id,
-                "text": chunk,
-                "filename": file.filename,
-                "meta": {"chunk_index": i, "total_chunks": len(chunks)},
-            })
-        ingest_documents(docs)
-        return {"status": "ok", "filename": file.filename, "chunks_ingested": len(docs)}
+        file_ext = os.path.splitext(file.filename)[1].lower()
+        metadata_base = {"filename": file.filename}
+        points = []
+
+        # 1. טיפול בתמונות (הופכות לתיאור טקסטואלי יחיד)
+        if file_ext in IMAGE_EXTENSIONS:
+            print(f"DEBUG: Processing as IMAGE")
+            image_bytes = await file.read()
+            vision_result = await process_image_for_rag(image_bytes, file.filename)
+            
+            content = vision_result.get("text", "")
+            if content:
+                vector = generate_embedding(content)
+                points.append(PointStruct(
+                    id=str(uuid4()),
+                    vector=vector,
+                    payload={"text": content, "type": "image", **metadata_base, **vision_result.get("metadata", {})}
+                ))
+
+        # 2. טיפול במסמכים (PDF / טקסט) עם Chunking
+        else:
+            print(f"DEBUG: Processing as DOCUMENT ({file_ext})")
+            file_bytes = await file.read()
+            raw_text = ""
+
+            if file_ext == ".pdf":
+                # חילוץ טקסט מכל דפי ה-PDF
+                with fitz.open(stream=file_bytes, filetype="pdf") as doc:
+                    raw_text = chr(12).join([page.get_text() for page in doc])
+            else:
+                # קבצי טקסט רגילים / Markdown
+                raw_text = file_bytes.decode("utf-8")
+
+            if not raw_text.strip():
+                print(f"⚠️ DEBUG WARNING: No text extracted from {file.filename}")
+                return {"status": "warning", "message": "No text content found."}
+
+            # לוגיקת Chunking: מפרקים את הטקסט לחתיכות של 1000 תווים עם חפיפה
+            # חפיפה (Overlap) עוזרת לשמור על הקשר בין פסקה לפסקה
+            chunk_size = 1000
+            overlap = 200
+            chunks = [raw_text[i:i + chunk_size] for i in range(0, len(raw_text), chunk_size - overlap)]
+            
+            print(f"DEBUG: Created {len(chunks)} chunks for document.")
+
+            for i, chunk in enumerate(chunks):
+                if not chunk.strip(): continue
+                
+                vector = generate_embedding(chunk)
+                points.append(PointStruct(
+                    id=str(uuid4()),
+                    vector=vector,
+                    payload={
+                        "text": chunk, 
+                        "type": "text", 
+                        "chunk_index": i, 
+                        **metadata_base
+                    }
+                ))
+
+        # 3. שמירה ב-Qdrant
+        if points:
+            client = get_qdrant_client()
+            print(f"DEBUG: Upserting {len(points)} points to Qdrant...")
+            client.upsert(
+                collection_name=settings.QDRANT_COLLECTION,
+                wait=True,
+                points=points
+            )
+            print(f"✅ DEBUG SUCCESS: {file.filename} processed into {len(points)} vectors.")
+            return {
+                "status": "success", 
+                "filename": file.filename, 
+                "chunks_ingested": len(points)
+            }
+        else:
+            return {"status": "error", "message": "No embeddable content found."}
+
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Upload failed: {str(e)}")
+        print(f"❌ DEBUG ERROR: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/documents")
 async def list_documents():
-    from app.db.vector_db import get_qdrant_client
-    from app.core.config import settings
     try:
         client = get_qdrant_client()
         collection_info = client.get_collection(collection_name=settings.QDRANT_COLLECTION)
@@ -93,7 +169,6 @@ async def query(request: QueryRequest):
 
     except Exception as e:
         print(f"ERROR in /query endpoint: {e}")
-        # הדפסת ה-Traceback המלאה כדי לראות בדיוק איפה זה קורס
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))

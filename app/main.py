@@ -7,10 +7,9 @@ logger = setup_logger(__name__)
 
 app = FastAPI(title="RAG AI System")
 
-# allow cross‑origin requests from frontend dev server etc.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # change if you want stricter rules
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
