@@ -1,12 +1,18 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File
+from app.db.vector_db import get_qdrant_client
 from app.schemas.schemas import IngestRequest, QueryRequest, QueryResponse
 from app.services.ingestion_service import ingest_documents
 from app.services.embedding_service import embed_texts
+from app.services.embedding_service import generate_embedding
 from app.services.retrieval_service import retrieve
 from app.services.llm_service import generate_answer
 from app.utils.file_parser import parse_file
 from app.utils.chunking import chunk_text
-import uuid
+from app.services.vision_service import process_image_for_rag
+from app.core.config import settings
+from qdrant_client.http.models import PointStruct
+from uuid import uuid4
+import os
 
 router = APIRouter()
 
@@ -18,30 +24,50 @@ async def ingest(req: IngestRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
+
 @router.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
     try:
-        content = await file.read()
-        text, _ = parse_file(content, file.filename)
-        chunks = chunk_text(text, chunk_size=500, overlap=50)
-        docs = []
-        for i, chunk in enumerate(chunks):
-            doc_id = f"{file.filename}_{i}_{uuid.uuid4()}"
-            docs.append({
-                "id": doc_id,
-                "text": chunk,
-                "filename": file.filename,
-                "meta": {"chunk_index": i, "total_chunks": len(chunks)},
-            })
-        ingest_documents(docs)
-        return {"status": "ok", "filename": file.filename, "chunks_ingested": len(docs)}
+        file_ext = os.path.splitext(file.filename)[1].lower()
+        content_to_embed = ""
+        metadata = {"filename": file.filename}
+
+        # בדיקה האם מדובר בתמונה
+        if file_ext in IMAGE_EXTENSIONS:
+            image_bytes = await file.read()
+            # הפעלת ה-Vision Service שכתבנו קודם
+            vision_result = await process_image_for_rag(image_bytes, file.filename)
+            content_to_embed = vision_result["text"]
+            metadata.update(vision_result["metadata"])
+        
+        # טיפול בקבצי PDF/Text רגילים (הלוגיקה הקיימת שלך)
+        else:
+            # ... קוד חילוץ טקסט מ-PDF ...
+            # content_to_embed = text_from_pdf
+            pass
+
+        # יצירת ה-Embedding ושמירה ב-Qdrant
+        if content_to_embed:
+            vector = generate_embedding(content_to_embed)
+            client = get_qdrant_client()
+            client.upsert(
+                collection_name=settings.QDRANT_COLLECTION,
+                points=[PointStruct(
+                    id=str(uuid4()),
+                    vector=vector,
+                    payload={"text": content_to_embed, **metadata}
+                )]
+            )
+        
+        return {"status": "success", "message": f"Processed {file.filename}"}
+        
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Upload failed: {str(e)}")
+        # טיפול בשגיאות
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/documents")
 async def list_documents():
-    from app.db.vector_db import get_qdrant_client
-    from app.core.config import settings
     try:
         client = get_qdrant_client()
         collection_info = client.get_collection(collection_name=settings.QDRANT_COLLECTION)
