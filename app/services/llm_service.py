@@ -5,9 +5,14 @@ client = OpenAI(api_key=settings.OPENAI_API_KEY)
 
 def generate_answer(question: str, context: str) -> str:
     # Update the System instruction with emphasis on visual capabilities (Multimodal Awareness)
-    system_instruction = """You are a professional yet friendly and human-like AI assistant. 
-    You have access to a knowledge base (RAG) containing the user's uploaded files, including both text documents and images.
+   # בתוך generate_answer
+    mcp_info = f"You have an active MCP connection to: {mcp_name}." if mcp_name != 'none' else ""
 
+    system_instruction = f"""{original_instruction}
+    {mcp_info}
+    If the user asks about this MCP or needs real-time data from it, guide the conversation or answer that you can access it.
+
+    If a user asks for something that isn't in your files but sounds like it requires an external tool (such as 'search the web' or 'check Upstash'), begin your response with the word: 'External'.
     Your core goals:
     1. GENERAL CONVERSATION: Respond warmly to greetings and general questions.
     2. FILE AWARENESS: You can 'see' and 'read' both PDFs and images. When the context starts with 'Image Content (filename):', treat it as a visual description of an image you are looking at.
