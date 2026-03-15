@@ -47,21 +47,31 @@ async def rag_agent(state: AgentState):
     query = state['messages'][-1]['content']
     
     try:
-        # יצירת embedding לשאילתה
+        # Generate query embedding
         query_vectors = embed_texts([query])
         query_vector = query_vectors[0]
         
-        # שליפת מידע רלוונטי מ-Qdrant
+        # Retrieve relevant context with metadata
         hits = retrieve(query_vector, top_k=5)
         
-        # בניית קונטקסט
-        context = "\n---\n".join(hits) if hits else "No relevant context found in uploaded documents."
+        # Build context with citations
+        context_parts = []
+        sources = set()
+        for hit in hits:
+            text = hit["text"]
+            source = hit["source"]
+            context_parts.append(f"Content: {text}\nSource: {source}")
+            sources.add(source)
+            
+        context = "\n---\n".join(context_parts) if hits else "No relevant context found in uploaded documents."
         
-        # יצירת תשובה מבוססת קונטקסט
-        system_prompt = "You are a helpful assistant. Use the provided context from uploaded documents to answer the user's question. If the context doesn't contain relevant information, say so politely."
-        user_prompt = f"Context from documents:\n{context}\n\nQuestion: {query}"
+        # Create answer
+        response_text = generate_answer(query, context)
         
-        response_text = generate_answer(system_prompt, user_prompt)
+        # Append source info to response if available
+        if sources:
+            source_list = ", ".join(list(sources))
+            response_text += f"\n\nSources: {source_list}"
         
         return {"messages": [{"role": "assistant", "content": response_text}]}
         
@@ -98,111 +108,99 @@ Respond ONLY with the tool name (one word), or say "none" if none of these tools
 
 Tool name:"""
 
-        tool_selection = llm.invoke(tool_selection_prompt).content.strip()
+        selection_response = await llm.ainvoke(tool_selection_prompt)
+        selected_tool = selection_response.content.strip().lower()
         
-        # אם ה-LLM אמר שאף כלי לא מתאים
-        if tool_selection.lower() in ["none", "", "rag"] or tool_selection not in mcp_tools:
-            return {"messages": [{"role": "assistant", "content": "I don't have a suitable MCP tool for this question. Let me search in your documents instead."}]}
+        # אם אף כלי לא מתאים - חזור ל-RAG
+        if selected_tool == "none" or selected_tool not in mcp_tools:
+            # Fallback to RAG agent
+            return await rag_agent(state)
         
-        selected_tool_name = tool_selection
-        selected_tool = mcp_tools[selected_tool_name]
+        # הרצת הכלי שנבחר
+        tool_info = mcp_tools[selected_tool]
+        server_config = tool_info['server_config']
         
-        # הכנת פרמטרים לכלי לפי ה-schema
-        schema = selected_tool.get('schema', {})
-        properties = schema.get('properties', {})
-        
-        if properties:
-            # יש פרמטרים - נבקש מה-LLM להכין אותם
-            params_prompt = f"""Extract parameters for tool "{selected_tool_name}" from the user question.
-
-Tool schema: {json.dumps(schema, indent=2)}
-
-User question: "{query}"
-
-Extract the parameters as a JSON object that matches the schema. If a parameter is not mentioned, use a reasonable default or null.
-
-JSON:"""
+        try:
+            result = await run_mcp_tool(
+                command=server_config.get('command', ''),
+                args=server_config.get('args', []),
+                env=server_config.get('env', {}),
+                tool_name=selected_tool,
+                tool_args={"query": query}
+            )
             
-            params_response = llm.invoke(params_prompt).content.strip()
+            # עיבוד התוצאה
+            clean_result = extract_text_content(result)
             
-            # ניקוי התשובה מ-markdown אם יש
-            if params_response.startswith("```json"):
-                params_response = params_response[7:]
-            if params_response.endswith("```"):
-                params_response = params_response[:-3]
-            params_response = params_response.strip()
+            return {"messages": [{"role": "assistant", "content": clean_result}]}
             
-            try:
-                tool_args = json.loads(params_response)
-            except json.JSONDecodeError:
-                # אם ה-JSON לא תקין, נשתמש בפרמטר פשוט
-                tool_args = {"query": query}
-        else:
-            # אין פרמטרים נדרשים
-            tool_args = {}
-        
-        # הפעלת הכלי הספציפי
-        server_config = selected_tool['server_config']
-        result = await run_mcp_tool(
-            command=server_config.get('command', ''),
-            args=server_config.get('args', []),
-            env=server_config.get('env', {}),
-            tool_name=selected_tool_name,
-            tool_args=tool_args
-        )
-        
-        # 🔥 שיפור הפורמט - חילוץ טקסט נקי מהתוצאה
-        clean_result = extract_text_content(result)
-        
-        # 🔥 יצירת תשובה יפה עם system prompt
-        final_response = f"{clean_result}"
-        
-        return {"messages": [{"role": "assistant", "content": final_response}]}
+        except Exception as tool_error:
+            error_msg = f"Error running MCP tool '{selected_tool}': {str(tool_error)}"
+            print(error_msg)
+            # Fallback to RAG when MCP fails
+            return await rag_agent(state)
         
     except Exception as e:
-        return {"messages": [{"role": "assistant", "content": f"Error running MCP tool: {str(e)}. Please check your MCP configuration."}]}
+        error_msg = f"Error in MCP agent: {str(e)}"
+        print(error_msg)
+        # Fallback to RAG on any error
+        return await rag_agent(state)
 
-# --- הנתב (The Router) ---
-def route_decision(state: AgentState):
-    user_input = state['messages'][-1]['content'].lower()
+# --- צומת החלטה ---
+async def route_decision(state: AgentState):
+    """
+    מחליט האם להשתמש ב-RAG או ב-MCP
+    """
+    query = state['messages'][-1]['content']
     mcp_tools = state.get('mcp_tools', {})
-    mcp_config = state.get('mcp_config', {})
     
-    # אם אין כלים זמינים, תמיד השתמש ב-RAG
+    # אם אין MCP מוגדר - תמיד לך ל-RAG
     if not mcp_tools:
         return "rag_agent"
     
-    # אם יש כלים, נבדוק אם השאלה רלוונטית לאחד מהם
-    available_tool_names = list(mcp_tools.keys())
-    mcp_name = mcp_config.get('name', 'External Tools')
-    
-    router_prompt = f"""Analyze the user query: "{user_input}"
+    # שאל את ה-LLM איך לנתב
+    routing_prompt = f"""You are a routing assistant. Based on the user query, decide which agent to use:
 
-You have these tools available:
-1. rag_agent: For questions about uploaded documents and files.
-2. mcp_agent: For using external tools like: {', '.join(available_tool_names)}
+User query: "{query}"
 
-Which agent is more suitable for this question?
-Respond ONLY with 'mcp_agent' or 'rag_agent'."""
-    
-    # קריאה מהירה ל-LLM
-    decision = llm.invoke(router_prompt).content.strip().lower()
-    
-    if "mcp_agent" in decision:
-        return "mcp_agent"
-    return "rag_agent"
+Available MCP tools: {', '.join(mcp_tools.keys()) if mcp_tools else 'None'}
 
-# בניית הגרף
+If the query is about external data (weather, time, external APIs) and MCP tools are available, respond with: MCP
+If the query is about the user's uploaded documents or general knowledge, respond with: RAG
+
+Respond with ONLY one word: MCP or RAG"""
+
+    try:
+        decision = await llm.ainvoke(routing_prompt)
+        choice = decision.content.strip().upper()
+        
+        if "MCP" in choice and mcp_tools:
+            return "mcp_agent"
+        else:
+            return "rag_agent"
+    except Exception as e:
+        print(f"Routing error: {e}")
+        return "rag_agent"  # ברירת מחדל
+
+# --- בניית הגרף ---
 workflow = StateGraph(AgentState)
+
+# הוספת הצמתים
 workflow.add_node("rag_agent", rag_agent)
 workflow.add_node("mcp_agent", mcp_agent)
 
+# נקודת ההתחלה
 workflow.set_conditional_entry_point(
     route_decision,
-    {"rag_agent": "rag_agent", "mcp_agent": "mcp_agent"}
+    {
+        "rag_agent": "rag_agent",
+        "mcp_agent": "mcp_agent"
+    }
 )
 
+# סיום
 workflow.add_edge("rag_agent", END)
 workflow.add_edge("mcp_agent", END)
 
+# קומפילציה
 graph = workflow.compile()
