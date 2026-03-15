@@ -15,8 +15,24 @@ services:
       - QDRANT_COLLECTION=rag_collection
       - EMBEDDING_MODEL=text-embedding-3-small
       - LLM_MODEL=gpt-4o-mini
+      - DATABASE_URL=postgresql://postgres:password@postgres:5432/rag_ai_db
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
     depends_on:
+      - postgres
       - qdrant
+
+  postgres:
+    image: postgres:15
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=rag_ai_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
 
   qdrant:
     image: qdrant/qdrant:latest
@@ -26,4 +42,5 @@ services:
       - qdrant_data:/qdrant/storage
 
 volumes:
+  postgres_data:
   qdrant_data:

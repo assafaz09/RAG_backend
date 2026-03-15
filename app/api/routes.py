@@ -118,6 +118,39 @@ async def upload_file(file: UploadFile = File(...)):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/assets")
+async def list_assets():
+    """List all assets (files) in the system"""
+    try:
+        client = get_qdrant_client()
+        collection_info = client.get_collection(collection_name=settings.QDRANT_COLLECTION)
+        count = collection_info.points_count
+        results = client.scroll(collection_name=settings.QDRANT_COLLECTION, limit=100)
+        
+        assets = []
+        seen_files = set()
+        
+        for point in results[0]:
+            if point.payload:
+                filename = point.payload.get("filename", "unknown")
+                doc_type = point.payload.get("type", "text")
+                
+                # Avoid duplicate entries for the same file
+                if filename not in seen_files and filename != "unknown":
+                    asset_type = "image" if doc_type == "image" else "file"
+                    assets.append({
+                        "id": str(point.id),
+                        "name": filename,
+                        "type": asset_type,
+                        "size": None,  # Size info not stored in vector DB
+                        "path": None   # Path info not stored in vector DB
+                    })
+                    seen_files.add(filename)
+        
+        return {"assets": assets}
+    except Exception as e:
+        return {"assets": [], "error": str(e)}
+
 @router.get("/documents")
 async def list_documents():
     try:
