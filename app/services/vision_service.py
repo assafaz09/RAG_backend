@@ -2,12 +2,22 @@ import base64
 from openai import OpenAI
 import io
 
-client = OpenAI() # Ensure API KEY is set in Environment Variables
+# Handle missing API key gracefully
+try:
+    client = OpenAI() # Ensure API KEY is set in Environment Variables
+except Exception:
+    client = None
 
 async def process_image_for_rag(image_bytes: bytes, filename: str):
     """
     Convert image to text and save it in Qdrant as part of RAG.
     """
+    if client is None:
+        return {
+            "text": f"Image Content ({filename}): Vision service unavailable - cannot process image",
+            "metadata": {"type": "image", "original_filename": filename}
+        }
+    
     # 1. Encode the image to Base64 for the API
     base64_image = base64.b64encode(image_bytes).decode('utf-8')
     

@@ -1,14 +1,22 @@
 from openai import OpenAI
 from app.core.config import settings
 
-client = OpenAI(api_key=settings.OPENAI_API_KEY)
+# Handle missing API key gracefully
+try:
+    client = OpenAI(api_key=settings.OPENAI_API_KEY)
+except Exception:
+    client = None
 
-def generate_answer(question: str, context: str) -> str:
-    # Update the System instruction with emphasis on visual capabilities (Multimodal Awareness)
-   # בתוך generate_answer
+def generate_answer(question: str, context: str, mcp_name: str = 'none') -> str:
+    """
+    Generates an answer using the LLM with provided context and optional MCP server info.
+    """
+    if client is None:
+        return "LLM service unavailable. Please configure OpenAI API key."
+    
     mcp_info = f"You have an active MCP connection to: {mcp_name}." if mcp_name != 'none' else ""
 
-    system_instruction = f"""{original_instruction}
+    system_instruction = f"""You are a professional RAG AI Assistant.
     {mcp_info}
     If the user asks about this MCP or needs real-time data from it, guide the conversation or answer that you can access it.
 
@@ -17,13 +25,13 @@ def generate_answer(question: str, context: str) -> str:
     1. GENERAL CONVERSATION: Respond warmly to greetings and general questions.
     2. FILE AWARENESS: You can 'see' and 'read' both PDFs and images. When the context starts with 'Image Content (filename):', treat it as a visual description of an image you are looking at.
     3. MULTIMODAL INTEGRATION: If a user asks about a visual detail (e.g., 'What does the chart show?' or 'What is in the photo?'), refer to the image descriptions in the context naturally.
-    4. SMART INFERENCE: Inquiries about 'Assaf Azran' should be treated with high relevance, as he is the primary subject of the knowledge base.
-    5. TRANSPARENCY: If information is missing, be honest. If you are describing an image, you can say 'In the image you uploaded, I can see...' 
-    6. PERSONALITY: Be concise but warm. Use natural phrasing like 'Looking at your files' or 'From the documents and images you provided'. Avoid robotic jargon.
+    4. SMART INFERENCE: Answer questions clearly based on the provided context.
+    5. TRANSPARENCY: If information is missing, be honest.
+    6. PERSONALITY: Be concise but warm.
 
     Always wrap up your response with a helpful or encouraging closing statement when appropriate."""
 
-    user_prompt = f"""Context from files (including text and image descriptions):
+    user_prompt = f"""Context from files:
     ---
     {context}
     ---

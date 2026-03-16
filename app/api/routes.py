@@ -323,3 +323,42 @@ async def get_recent_activity():
         return {"activities": activities[:20]}  # Return last 20 activities
     except Exception as e:
         return {"activities": [], "error": str(e)}
+
+@router.post("/search")
+async def hybrid_search(request: QueryRequest):
+    """Hybrid search endpoint combining vector and keyword search"""
+    try:
+        # Extract query from request
+        user_query = getattr(request, 'query', getattr(request, 'question', None))
+        
+        if not user_query:
+            raise ValueError("No query or question found in request body")
+        
+        # Get search mode from request (default to hybrid)
+        search_mode = getattr(request, 'search_mode', 'hybrid')
+        top_k = getattr(request, 'top_k', 5)
+        
+        # Perform hybrid search
+        results = retrieve(user_query, search_mode=search_mode, top_k=top_k)
+        
+        # Generate answer using the retrieved context
+        context = "\n---\n".join([doc["text"] for doc in results]) if results else "No relevant context found."
+        system_prompt = "You are a helpful assistant. Use the provided context to answer the user's question."
+        user_prompt = f"Context:\n{context}\n\nQuestion: {user_query}"
+        
+        response_text = generate_answer(system_prompt, user_prompt)
+        
+        # Return results with search metadata
+        return {
+            "answer": response_text,
+            "results": results,
+            "search_mode": search_mode,
+            "total_results": len(results),
+            "query": user_query
+        }
+        
+    except Exception as e:
+        print(f"ERROR in /search endpoint: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))

@@ -13,8 +13,10 @@ class IngestRequest(BaseModel):
 
 
 class QueryRequest(BaseModel):
-    question: str
+    question: Optional[str] = None
+    query: Optional[str] = None  # Alternative field name for flexibility
     top_k: int = 5
+    search_mode: str = "hybrid"  # Options: "hybrid", "vector", "keyword"
 
 
 class QueryResponse(BaseModel):
