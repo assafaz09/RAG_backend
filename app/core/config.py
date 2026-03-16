@@ -1,5 +1,10 @@
 from pydantic_settings import BaseSettings
 from typing import Optional
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 
 class Settings(BaseSettings):
@@ -22,6 +27,15 @@ class Settings(BaseSettings):
     JWT_SECRET_KEY: str = "your-super-secret-jwt-key-change-in-production"
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+
+    # Elasticsearch settings
+    ELASTICSEARCH_URL: str = "http://localhost:9200"
+    ELASTICSEARCH_INDEX: str = "rag_documents"
+
+    # Hybrid search settings
+    HYBRID_SEARCH_VECTOR_WEIGHT: float = 0.5
+    HYBRID_SEARCH_KEYWORD_WEIGHT: float = 0.5
+    HYBRID_SEARCH_TOP_K: int = 10
 
 
 settings = Settings()

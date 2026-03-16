@@ -47,16 +47,53 @@ async def discover_mcp_tools(config: dict) -> Dict[str, Any]:
 
 
 async def run_mcp_tool(command: str, args: list, env: dict, tool_name: str, tool_args: dict):
-    # הגדרת השרת לפי ה-JSON שהתקבל מהמשתמש
-    server_params = StdioServerParameters(
-        command=command,
-        args=args,
-        env=env
-    )
-    
-    async with stdio_client(server_params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            # קריאה לכלי הספציפי שהסוכן בחר
-            result = await session.call_tool(tool_name, tool_args)
-            return result.content
+    """
+    הפעלת כלי MCP עם תמיכה ב-Windows
+    """
+    try:
+        # בדיקה אם זו פקודת Windows פשוטה
+        if command in ["cmd", "echo", "type"] or command.endswith(".exe"):
+            # הפעלה ישירה של פקודות Windows
+            import subprocess
+            
+            if command == "cmd" and "/c" in args:
+                # פקודת cmd עם פרמטרים
+                full_command = [command] + args
+            elif command == "echo":
+                # פקודת echo פשוטה
+                message = tool_args.get("query", "") or tool_args.get("message", "")
+                return [{"text": f"Echo: {message}"}]
+            else:
+                # פקודה אחרת
+                full_command = [command] + args
+            
+            try:
+                result = subprocess.run(
+                    full_command,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    env=env
+                )
+                return [{"text": result.stdout.strip()}]
+            except subprocess.TimeoutExpired:
+                return [{"text": "Command timed out"}]
+            except Exception as e:
+                return [{"text": f"Command error: {str(e)}"}]
+        
+        # הפעלה רגילה של MCP server
+        server_params = StdioServerParameters(
+            command=command,
+            args=args,
+            env=env
+        )
+        
+        async with stdio_client(server_params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                # קריאה לכלי הספציפי שהסוכן בחר
+                result = await session.call_tool(tool_name, tool_args)
+                return result.content
+                
+    except Exception as e:
+        return [{"text": f"MCP Tool Error: {str(e)}"}]
