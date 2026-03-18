@@ -14,6 +14,8 @@ class User(Base):
     name = Column(String(255), nullable=False)
     profile_picture_url = Column(Text, nullable=True)
     is_active = Column(Boolean, default=True, nullable=False)
+    auth_provider = Column(String(50), default="supabase", nullable=False)  # 'supabase', 'google', etc.
+    auth_provider_id = Column(String(255), nullable=True, unique=True)  # ID from auth provider
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False)
 
@@ -28,6 +30,7 @@ class Conversation(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     title = Column(String(255), nullable=True)
+    thread_id = Column(String(255), unique=True, nullable=False, index=True)  # LangGraph thread ID
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     user = relationship("User", back_populates="conversations")

@@ -40,9 +40,8 @@ class HybridSearchService:
     async def _vector_search_only(self, query: str, top_k: int) -> List[Dict[str, Any]]:
         """Perform vector search only"""
         try:
-            # Generate query embedding - run sync function in async context
-            loop = asyncio.get_event_loop()
-            query_vectors = await loop.run_in_executor(None, embed_texts, [query])
+            # Generate query embedding - now using async function
+            query_vectors = await embed_texts([query])
             query_vector = query_vectors[0]
             
             # Search Qdrant

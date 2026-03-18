@@ -9,6 +9,8 @@ from app.core.logging import setup_logger
 from app.services.mcp_service import discover_mcp_tools, run_mcp_tool
 from app.db.database import get_db, engine, Base
 from app.db.models import User, Conversation, Message
+from app.services.conversation_persistence import conversation_persistence
+from app.dependencies.auth import get_current_active_user, get_optional_current_user
 from .orchestrator.orchestrator import orchestrator
 from .orchestrator.schemas import OrchestrationRequest, OrchestrationResponse, AgentType
 import uuid
@@ -18,10 +20,7 @@ logger = setup_logger(__name__)
 
 app = FastAPI(title="RAG AI System")
 
-# Simple in-memory storage for user-specific MCP configs (for demo purposes)
-# In production, this would be in a database or Redis
-user_mcp_configs = {}
-user_mcp_tools_map = {}
+from app.services.user_mcp_service import user_mcp_service
 
 # WebSocket connection manager for real-time updates
 class ConnectionManager:
@@ -72,85 +71,91 @@ async def on_startup():
 
 
 @app.post("/deploy-mcp")
-async def deploy_mcp(config: dict = Body(...), user_id: str = "default"):
-    global user_mcp_configs, user_mcp_tools_map
-    user_mcp_configs[user_id] = config
+async def deploy_mcp(
+    config: dict = Body(...), 
+    current_user: User = Depends(get_current_active_user)
+):
+    user_id = str(current_user.id)
+    user_mcp_service.set_config(user_id, config)
     
     try:
         tools = await discover_mcp_tools(config)
-        user_mcp_tools_map[user_id] = tools
+        user_mcp_service.set_tools(user_id, tools)
         logger.info(f"Discovered {len(tools)} MCP tools for user {user_id}")
     except Exception as e:
         logger.error(f"Failed to discover MCP tools: {e}")
         if config.get('main_tool'):
-            user_mcp_tools_map[user_id] = {
+            user_mcp_service.set_tools(user_id, {
                 config['main_tool']: {
                     "description": f"Main tool: {config['main_tool']}",
                     "schema": {"type": "object", "properties": {}},
                     "server_config": config
                 }
-            }
+            })
     
     return {
         "status": "MCP Server Configured",
-        "tools": list(user_mcp_tools_map.get(user_id, {}).keys()),
+        "user_id": user_id,
+        "tools": list(user_mcp_service.get_tools(user_id, {}).keys()),
         "tool_details": {name: {"description": info["description"]} 
-                         for name, info in user_mcp_tools_map.get(user_id, {}).items()}
+                         for name, info in user_mcp_service.get_tools(user_id, {}).items()}
     }
 
 
 @app.post("/chat")
 async def chat(
-    message: str = Body(...), 
-    user_id: str = "default",
-    db: Session = Depends(get_db)
+    message: str = Body(...),
+    thread_id: str = Body(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
 ):
-    global user_mcp_configs, user_mcp_tools_map
+    user_id = str(current_user.id)
 
-    # 1. Get or create a default conversation for the user
-    # For now, we use a simple 'default' user if not provided
-    user = db.query(User).first() # Just get the first user for demo
-    if not user:
-        # Create a dummy user for testing if none exists
-        user = User(email="test@example.com", name="Test User")
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-
-    conv = db.query(Conversation).filter(Conversation.user_id == user.id).first()
-    if not conv:
-        conv = Conversation(user_id=user.id, title="New Chat")
-        db.add(conv)
-        db.commit()
-        db.refresh(conv)
+    # 1. Get or create conversation for the user
+    conv = conversation_persistence.get_or_create_conversation(
+        db, user_id, thread_id
+    )
 
     # 2. Save user message
     user_msg = Message(conversation_id=conv.id, role="user", content=message)
     db.add(user_msg)
     db.commit()
 
-    # 3. Invoke Agent Graph
+    # 3. Invoke Agent Graph with user context
     inputs = {
         "messages": [{"role": "user", "content": message}],
-        "mcp_config": user_mcp_configs.get(user_id, {}),
-        "mcp_tools": user_mcp_tools_map.get(user_id, {}),  
-        "user_id": str(user.id)
+        "mcp_config": user_mcp_service.get_config(user_id) or {},
+        "mcp_tools": user_mcp_service.get_tools(user_id) or {},  
+        "user_id": user_id,
+        "thread_id": conv.thread_id,
+        "filesystem_root": f"user_data/{user_id}"
     }
     
-    result = await graph.ainvoke(inputs)
+    # Configure with checkpoint saver for persistence
+    config = {
+        "thread_id": conv.thread_id,
+        "user_id": user_id
+    }
+    
+    result = await graph.ainvoke(inputs, config=config)
     response_content = result["messages"][-1]["content"]
 
-    # 4. Save assistant response
+    # 5. Save assistant response
     assistant_msg = Message(conversation_id=conv.id, role="assistant", content=response_content)
     db.add(assistant_msg)
     db.commit()
 
-    return {"response": response_content}
+    return {
+        "response": response_content,
+        "thread_id": conv.thread_id,
+        "conversation_id": str(conv.id)
+    }
 
 @app.get("/mcp-servers")
-async def get_mcp_servers(user_id: str = "default"):
-    config = user_mcp_configs.get(user_id, {})
-    tools = user_mcp_tools_map.get(user_id, {})
+async def get_mcp_servers(current_user: User = Depends(get_current_active_user)):
+    user_id = str(current_user.id)
+    config = user_mcp_service.get_config(user_id) or {}
+    tools = user_mcp_service.get_tools(user_id) or {}
     
     if config and "name" in config:
         return {
@@ -162,15 +167,97 @@ async def get_mcp_servers(user_id: str = "default"):
     return {"servers": [], "tools": []}
 
 
+# Conversation Management Endpoints
+
+@app.get("/conversations")
+async def list_conversations(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """List all conversations for the current user"""
+    conversations = conversation_persistence.list_user_conversations(db, current_user)
+    return {
+        "conversations": [
+            {
+                "id": str(conv.id),
+                "title": conv.title,
+                "thread_id": conv.thread_id,
+                "created_at": conv.created_at.isoformat()
+            }
+            for conv in conversations
+        ]
+    }
+
+@app.get("/conversations/{thread_id}")
+async def get_conversation(
+    thread_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Get a specific conversation with all messages"""
+    # Validate user access
+    if not conversation_persistence.validate_user_access(current_user, thread_id):
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    conv = db.query(Conversation).filter(
+        Conversation.thread_id == thread_id,
+        Conversation.user_id == current_user.id
+    ).first()
+    
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    messages = db.query(Message).filter(
+        Message.conversation_id == conv.id
+    ).order_by(Message.created_at).all()
+    
+    return {
+        "conversation": {
+            "id": str(conv.id),
+            "title": conv.title,
+            "thread_id": conv.thread_id,
+            "created_at": conv.created_at.isoformat()
+        },
+        "messages": [
+            {
+                "id": str(msg.id),
+                "role": msg.role,
+                "content": msg.content,
+                "created_at": msg.created_at.isoformat()
+            }
+            for msg in messages
+        ]
+    }
+
+@app.delete("/conversations/{thread_id}")
+async def delete_conversation(
+    thread_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Delete a conversation and all its data"""
+    success = conversation_persistence.delete_conversation(db, current_user, thread_id)
+    
+    if not success:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    return {"message": "Conversation deleted successfully"}
+
+
 # Multi-Agent Orchestration Endpoints
 
 @app.post("/orchestrate")
-async def start_orchestration(request: OrchestrationRequest):
+async def start_orchestration(
+    request: OrchestrationRequest,
+    current_user: User = Depends(get_current_active_user)
+):
     """Start a new multi-agent orchestration session"""
     try:
+        # Add user context to orchestration
         session = await orchestrator.start_session(
             goal=request.goal,
-            preferred_agents=request.preferred_agents
+            preferred_agents=request.preferred_agents,
+            user_id=str(current_user.id)
         )
         
         # Send initial status via WebSocket if connection exists
@@ -267,9 +354,11 @@ async def resume_orchestration(session_id: str):
 
 
 @app.get("/orchestrate")
-async def list_orchestration_sessions():
-    """List all orchestration sessions"""
-    sessions = orchestrator.list_sessions()
+async def list_orchestration_sessions(
+    current_user: User = Depends(get_current_active_user)
+):
+    """List all orchestration sessions for the current user"""
+    sessions = orchestrator.list_sessions(user_id=str(current_user.id))
     return {
         "sessions": [
             {

@@ -3,8 +3,11 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from app.db.database import get_db
-from app.services.auth import auth_service
+from app.services.supabase_auth import supabase_auth_service
 from app.db.models import User
+import logging
+
+logger = logging.getLogger(__name__)
 
 security = HTTPBearer()
 
@@ -13,17 +16,25 @@ def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db)
 ) -> User:
-    """Get current authenticated user"""
+    """Get current authenticated user using Supabase JWT"""
     token = credentials.credentials
-    user = auth_service.get_current_user(db, token)
+    
+    logger.info(f"🔍 [AUTH] Attempting to authenticate user")
+    logger.info(f"🔍 [AUTH] Token received: {token[:20]}...{token[-10:] if len(token) > 30 else token}")
+    
+    user = supabase_auth_service.get_current_user(db, token)
+    
+    logger.info(f"🔍 [AUTH] User lookup result: {user}")
     
     if user is None:
+        logger.warning(f"❌ [AUTH] Authentication failed - user not found")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Could not validate credentials",
             headers={"WWW-Authenticate": "Bearer"},
         )
     
+    logger.info(f"✅ [AUTH] Authentication successful for user: {user.id}")
     return user
 
 
@@ -48,4 +59,4 @@ def get_optional_current_user(
         return None
     
     token = credentials.credentials
-    return auth_service.get_current_user(db, token)
+    return supabase_auth_service.get_current_user(db, token)

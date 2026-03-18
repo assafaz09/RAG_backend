@@ -1,3 +1,4 @@
+import re
 from openai import OpenAI
 from app.core.config import settings
 
@@ -49,4 +50,14 @@ def generate_answer(question: str, context: str, mcp_name: str = 'none') -> str:
         temperature=0.7,
     )
     
-    return resp.choices[0].message.content.strip()
+    # Clean the response to remove special characters
+    response = resp.choices[0].message.content.strip()
+    print(f"🔍 [LLM_SERVICE] Raw response: {repr(response)}")
+    
+    # Remove control characters and special Unicode characters
+    cleaned_response = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', response)
+    # Remove multiple consecutive spaces
+    cleaned_response = re.sub(r'\s+', ' ', cleaned_response)
+    
+    print(f"🔍 [LLM_SERVICE] Cleaned response: {repr(cleaned_response)}")
+    return cleaned_response.strip()

@@ -184,7 +184,7 @@ async def query(request: QueryRequest):
         
         # 2. שליפת מידע
         # שים לב: לפי הלוגים Retrieval עובד ומצא 5 hits!
-        hits = retrieve(query_vector, top_k=request.top_k if hasattr(request, 'top_k') else 5)
+        hits = await retrieve(query_vector, top_k=request.top_k if hasattr(request, 'top_k') else 5)
         
         print(f"DEBUG: Successfully found {len(hits)} hits.")
         
@@ -339,7 +339,7 @@ async def hybrid_search(request: QueryRequest):
         top_k = getattr(request, 'top_k', 5)
         
         # Perform hybrid search
-        results = retrieve(user_query, search_mode=search_mode, top_k=top_k)
+        results = await retrieve(user_query, search_mode=search_mode, top_k=top_k)
         
         # Generate answer using the retrieved context
         context = "\n---\n".join([doc["text"] for doc in results]) if results else "No relevant context found."

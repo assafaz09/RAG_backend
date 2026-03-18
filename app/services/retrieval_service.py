@@ -4,7 +4,7 @@ from app.services.hybrid_search_service import hybrid_search_service
 from app.core.config import settings
 from typing import List, Dict
 
-def retrieve(query: str, search_mode: str = "hybrid", top_k: int = 5) -> List[Dict]:
+async def retrieve(query: str, search_mode: str = "hybrid", top_k: int = 5) -> List[Dict]:
     """
     Retrieve documents using hybrid search
     
@@ -19,13 +19,8 @@ def retrieve(query: str, search_mode: str = "hybrid", top_k: int = 5) -> List[Di
     try:
         print(f"DEBUG: Executing {search_mode} retrieval")
         
-        # Use hybrid search service - run async function in sync context
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            results = loop.run_until_complete(hybrid_search_service.search(query, search_mode, top_k))
-        finally:
-            loop.close()
+        # Use hybrid search service - now both functions are async
+        results = await hybrid_search_service.search(query, search_mode, top_k)
         
         # Convert to legacy format for backward compatibility
         legacy_results = []

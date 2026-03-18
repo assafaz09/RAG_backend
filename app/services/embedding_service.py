@@ -1,6 +1,7 @@
 from typing import List
 from openai import OpenAI
 from app.core.config import settings
+import asyncio
 
 # Handle missing API key gracefully
 try:
@@ -8,7 +9,19 @@ try:
 except Exception:
     client = None
 
-def embed_texts(texts: List[str]) -> List[List[float]]:
+async def embed_texts(texts: List[str]) -> List[List[float]]:
+    if not texts:
+        return []
+    if client is None:
+        return []
+    
+    # Run the blocking OpenAI call in thread pool
+    loop = asyncio.get_event_loop()
+    resp = await loop.run_in_executor(None, lambda: client.embeddings.create(model=settings.EMBEDDING_MODEL, input=texts))
+    return [r.embedding for r in resp.data]
+
+def embed_texts_sync(texts: List[str]) -> List[List[float]]:
+    """Sync version for backward compatibility"""
     if not texts:
         return []
     if client is None:
@@ -17,9 +30,9 @@ def embed_texts(texts: List[str]) -> List[List[float]]:
     return [r.embedding for r in resp.data]
 
 # פונקציית העזר החדשה שה-Routes מחפש
-def generate_embedding(text: str) -> List[float]:
+async def generate_embedding(text: str) -> List[float]:
     if not text:
         return []
     # אנחנו פשוט משתמשים בפונקציה הקיימת ושולחים לה רשימה עם איבר אחד
-    embeddings = embed_texts([text])
+    embeddings = await embed_texts([text])
     return embeddings[0] if embeddings else []

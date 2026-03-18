@@ -37,5 +37,18 @@ class Settings(BaseSettings):
     HYBRID_SEARCH_KEYWORD_WEIGHT: float = 0.5
     HYBRID_SEARCH_TOP_K: int = 10
 
+    # Supabase settings
+    SUPABASE_URL: Optional[str] = None
+    SUPABASE_ANON_KEY: Optional[str] = None
+    SUPABASE_SERVICE_ROLE_KEY: Optional[str] = None
+    SUPABASE_DB_URL: Optional[str] = None
+    SUPABASE_JWT_SECRET: Optional[str] = None
+    SUPABASE_JWT_PUBLIC_KEY: Optional[str] = None
+    SUPABASE_JWT_ALGORITHM: str = "ES256"
+
+    # Google OAuth settings (configured in Supabase)
+    GOOGLE_CLIENT_ID: Optional[str] = None
+    GOOGLE_CLIENT_SECRET: Optional[str] = None
+
 
 settings = Settings()

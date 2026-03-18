@@ -1,5 +1,5 @@
 import json
-from typing import TypedDict, Annotated, Sequence, Dict, Any
+from typing import TypedDict, Annotated, Sequence, Dict, Any, Optional
 import operator
 from langgraph.graph import StateGraph, END
 from langchain_openai import ChatOpenAI
@@ -20,6 +20,8 @@ class AgentState(TypedDict):
     mcp_config: dict  # הגדרות ה-MCP
     mcp_tools: Dict[str, Any]  # כל הכלים שנמצאו {name: {description, schema, server_config}}
     user_id: str  # מזהה המשתמש
+    thread_id: Optional[str]  # מזהה ה-thread
+    filesystem_root: Optional[str]  # שורש ה-filesystem
 
 def extract_text_content(result) -> str:
     """
@@ -54,7 +56,7 @@ async def research_node(state: AgentState) -> AgentState:
     user_message = messages[-1]["content"]
     
     # אחזור מידע רלוונטי באמצעות חיפוש היברידי
-    retrieved_docs = retrieve(user_message, search_mode="hybrid", top_k=5)
+    retrieved_docs = await retrieve(user_message, search_mode="hybrid", top_k=5)
     
     # יצירת prompt עם המידע שאוחזר
     context = "\n".join([doc["text"] for doc in retrieved_docs])
@@ -214,7 +216,7 @@ async def rag_agent(state: AgentState):
     
     try:
         # Use hybrid search (default mode)
-        hits = retrieve(query, search_mode="hybrid", top_k=5)
+        hits = await retrieve(query, search_mode="hybrid", top_k=5)
         
         # Build context with citations and search info
         context_parts = []
