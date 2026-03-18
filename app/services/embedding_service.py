@@ -29,10 +29,10 @@ def embed_texts_sync(texts: List[str]) -> List[List[float]]:
     resp = client.embeddings.create(model=settings.EMBEDDING_MODEL, input=texts)
     return [r.embedding for r in resp.data]
 
-# פונקציית העזר החדשה שה-Routes מחפש
+# Helper function that Routes is looking for
 async def generate_embedding(text: str) -> List[float]:
     if not text:
         return []
-    # אנחנו פשוט משתמשים בפונקציה הקיימת ושולחים לה רשימה עם איבר אחד
+    # We simply use the existing function and send it a list with one item
     embeddings = await embed_texts([text])
     return embeddings[0] if embeddings else []

@@ -38,7 +38,7 @@ async def upload_file(file: UploadFile = File(...)):
         metadata_base = {"filename": file.filename}
         points = []
 
-        # 1. טיפול בתמונות (הופכות לתיאור טקסטואלי יחיד)
+        # 1. Handle images (converted to single textual description)
         if file_ext in IMAGE_EXTENSIONS:
             print(f"DEBUG: Processing as IMAGE")
             image_bytes = await file.read()
@@ -53,26 +53,26 @@ async def upload_file(file: UploadFile = File(...)):
                     payload={"text": content, "type": "image", **metadata_base, **vision_result.get("metadata", {})}
                 ))
 
-        # 2. טיפול במסמכים (PDF / טקסט) עם Chunking
+        # 2. Handle documents (PDF / text) with Chunking
         else:
             print(f"DEBUG: Processing as DOCUMENT ({file_ext})")
             file_bytes = await file.read()
             raw_text = ""
 
             if file_ext == ".pdf":
-                # חילוץ טקסט מכל דפי ה-PDF
+                # Extract text from all PDF pages
                 with fitz.open(stream=file_bytes, filetype="pdf") as doc:
                     raw_text = chr(12).join([page.get_text() for page in doc])
             else:
-                # קבצי טקסט רגילים / Markdown
+                # Regular text files / Markdown
                 raw_text = file_bytes.decode("utf-8")
 
             if not raw_text.strip():
                 print(f"⚠️ DEBUG WARNING: No text extracted from {file.filename}")
                 return {"status": "warning", "message": "No text content found."}
 
-            # לוגיקת Chunking: מפרקים את הטקסט לחתיכות של 1000 תווים עם חפיפה
-            # חפיפה (Overlap) עוזרת לשמור על הקשר בין פסקה לפסקה
+            # Chunking logic: break text into chunks of 1000 characters with overlap
+            # Overlap helps maintain context between paragraphs
             chunk_size = 1000
             overlap = 200
             chunks = [raw_text[i:i + chunk_size] for i in range(0, len(raw_text), chunk_size - overlap)]
@@ -94,7 +94,7 @@ async def upload_file(file: UploadFile = File(...)):
                     }
                 ))
 
-        # 3. שמירה ב-Qdrant
+        # 3. Save to Qdrant
         if points:
             client = get_qdrant_client()
             print(f"DEBUG: Upserting {len(points)} points to Qdrant...")
@@ -169,29 +169,29 @@ async def list_documents():
 @router.post("/query")
 async def query(request: QueryRequest):
     try:
-        # 0. DEBUG - בוא נראה מה קיבלנו מהמשתמש
+        # 0. DEBUG - let's see what we received from the user
         print(f"DEBUG: Received request: {request}")
         
-        # במידה והשדה ב-Schema שלך נקרא 'question' ולא 'query', שנה כאן:
+        # If the field in your Schema is called 'question' and not 'query', change here:
         user_query = getattr(request, 'query', getattr(request, 'question', None))
         
         if not user_query:
             raise ValueError("No query or question found in request body")
 
-        # 1. יצירת Embedding
+        # 1. Create Embedding
         query_vectors = embed_texts([user_query])
         query_vector = query_vectors[0]
         
-        # 2. שליפת מידע
-        # שים לב: לפי הלוגים Retrieval עובד ומצא 5 hits!
+        # 2. Retrieve information
+        # Note: According to the logs, Retrieval works and found 5 hits!
         hits = await retrieve(query_vector, top_k=request.top_k if hasattr(request, 'top_k') else 5)
         
         print(f"DEBUG: Successfully found {len(hits)} hits.")
         
-        # 3. בניית קונטקסט
+        # 3. Build context
         context = "\n---\n".join(hits) if hits else "No relevant context found."
         
-        # 4. יצירת תשובה
+        # 4. Generate response
         system_prompt = "You are a helpful assistant. Use the provided context to answer the user's question."
         user_prompt = f"Context:\n{context}\n\nQuestion: {user_query}"
         

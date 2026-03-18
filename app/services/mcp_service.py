@@ -7,8 +7,8 @@ from mcp.client.stdio import stdio_client
 
 async def discover_mcp_tools(config: dict) -> Dict[str, Any]:
     """
-    מגלה את כל הכלים הזמינים ב-MCP server.
-    מחזיר מילון: {tool_name: {description, schema, server_config}}
+    Discover all available tools in MCP server.
+    Returns dictionary: {tool_name: {description, schema, server_config}}
     """
     server_params = StdioServerParameters(
         command=config.get('command', ''),
@@ -23,7 +23,7 @@ async def discover_mcp_tools(config: dict) -> Dict[str, Any]:
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 
-                # 🔥 גילוי כל הכלים הזמינים
+                # 🔥 Discover all available tools
                 tools_response = await session.list_tools()
                 
                 for tool in tools_response.tools:
@@ -35,7 +35,7 @@ async def discover_mcp_tools(config: dict) -> Dict[str, Any]:
                     
     except Exception as e:
         print(f"Error discovering MCP tools: {e}")
-        # אם לא הצלחנו לגלות, נחזיר כלי דיפולטיבי אחד
+        # If discovery failed, return one default tool
         if config.get('main_tool'):
             tools[config['main_tool']] = {
                 "description": f"Main tool: {config['main_tool']}",
@@ -48,23 +48,23 @@ async def discover_mcp_tools(config: dict) -> Dict[str, Any]:
 
 async def run_mcp_tool(command: str, args: list, env: dict, tool_name: str, tool_args: dict):
     """
-    הפעלת כלי MCP עם תמיכה ב-Windows
+    Execute MCP tool with Windows support
     """
     try:
-        # בדיקה אם זו פקודת Windows פשוטה
+        # Check if this is a simple Windows command
         if command in ["cmd", "echo", "type"] or command.endswith(".exe"):
-            # הפעלה ישירה של פקודות Windows
+            # Direct execution of Windows commands
             import subprocess
             
             if command == "cmd" and "/c" in args:
-                # פקודת cmd עם פרמטרים
+                # CMD command with parameters
                 full_command = [command] + args
             elif command == "echo":
-                # פקודת echo פשוטה
+                # Simple echo command
                 message = tool_args.get("query", "") or tool_args.get("message", "")
                 return [{"text": f"Echo: {message}"}]
             else:
-                # פקודה אחרת
+                # Other command
                 full_command = [command] + args
             
             try:
@@ -81,7 +81,7 @@ async def run_mcp_tool(command: str, args: list, env: dict, tool_name: str, tool
             except Exception as e:
                 return [{"text": f"Command error: {str(e)}"}]
         
-        # הפעלה רגילה של MCP server
+        # Regular MCP server execution
         server_params = StdioServerParameters(
             command=command,
             args=args,
@@ -91,7 +91,7 @@ async def run_mcp_tool(command: str, args: list, env: dict, tool_name: str, tool
         async with stdio_client(server_params) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
-                # קריאה לכלי הספציפי שהסוכן בחר
+                # Call the specific tool the agent chose
                 result = await session.call_tool(tool_name, tool_args)
                 return result.content
                 

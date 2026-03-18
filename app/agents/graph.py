@@ -17,18 +17,18 @@ from ..services.llm_service import generate_answer
 
 class AgentState(TypedDict):
     messages: Annotated[Sequence[dict], operator.add]
-    mcp_config: dict  # הגדרות ה-MCP
-    mcp_tools: Dict[str, Any]  # כל הכלים שנמצאו {name: {description, schema, server_config}}
-    user_id: str  # מזהה המשתמש
-    thread_id: Optional[str]  # מזהה ה-thread
-    filesystem_root: Optional[str]  # שורש ה-filesystem
+    mcp_config: dict  # MCP configurations
+    mcp_tools: Dict[str, Any]  # All discovered tools {name: {description, schema, server_config}}
+    user_id: str  # User identifier
+    thread_id: Optional[str]  # Thread identifier
+    filesystem_root: Optional[str]  # Filesystem root
 
 def extract_text_content(result) -> str:
     """
-    מחלץ טקסט נקי מתוצאת MCP.
-    מטפל ב-TextContent, list של TextContent, או string רגיל.
+    Extract clean text from MCP result.
+    Handles TextContent, list of TextContent, or regular string.
     """
-    # אם זה list (כמו בתמונה שהראית)
+    # If it's a list (like in the image you showed)
     if isinstance(result, list):
         texts = []
         for item in result:
@@ -38,27 +38,27 @@ def extract_text_content(result) -> str:
                 texts.append(item)
         return "\n".join(texts) if texts else str(result)
     
-    # אם זה TextContent אובייקט
+    # If it's a TextContent object
     if hasattr(result, 'text'):
         return result.text
     
-    # אם זה string
+    # If it's a string
     if isinstance(result, str):
         return result
     
-    # ברירת מחדל
+    # Default
     return str(result)
 
-# --- צומת RAG (הסוכן הישן) ---
+# --- RAG Node (the old agent) ---
 async def research_node(state: AgentState) -> AgentState:
-    """צומת RAG - אחזור מידע רלוונטי"""
+    """RAG node - retrieve relevant information"""
     messages = state["messages"]
     user_message = messages[-1]["content"]
     
-    # אחזור מידע רלוונטי באמצעות חיפוש היברידי
+    # Retrieve relevant information using hybrid search
     retrieved_docs = await retrieve(user_message, search_mode="hybrid", top_k=5)
     
-    # יצירת prompt עם המידע שאוחזר
+    # Create prompt with retrieved information
     context = "\n".join([doc["text"] for doc in retrieved_docs])
     prompt = f"""Context: {context}
 
@@ -66,7 +66,7 @@ Question: {user_message}
 
 Please provide a comprehensive answer based on the context above."""
     
-    # הפקת תשובה
+    # Generate response
     response = await generate_answer(prompt)
     
     return {
@@ -76,23 +76,23 @@ Please provide a comprehensive answer based on the context above."""
         ]
     }
 
-# --- צומת MCP ---
+# --- MCP Node ---
 async def mcp_node(state: AgentState) -> AgentState:
-    """צומת MCP - הפעלת כלי MCP"""
+    """MCP node - execute MCP tool"""
     messages = state["messages"]
     user_message = messages[-1]["content"]
     mcp_tools = state.get("mcp_tools", {})
     
     if not mcp_tools:
-        # אם אין כלים, המשך ללא MCP
+        # If no tools available, continue without MCP
         return state
     
-    # בחירת הכלי הראשון שזמין (בפועל יהיה לוגיקה חכמה יותר)
+    # Select first available tool (in practice will have smarter logic)
     tool_name = list(mcp_tools.keys())[0]
     tool_config = mcp_tools[tool_name]["server_config"]
     
     try:
-        # הפעלת הכלי
+        # Execute the tool
         result = await run_mcp_tool(tool_name, {"query": user_message}, tool_config)
         result_text = extract_text_content(result)
         
@@ -110,16 +110,16 @@ async def mcp_node(state: AgentState) -> AgentState:
             ]
         }
 
-# --- צומת LLM סופי ---
+# --- Final LLM Node ---
 async def llm_node(state: AgentState) -> AgentState:
-    """צומת LLM סופי - סיכום והפקת תשובה סופית"""
+    """Final LLM node - summarize and generate final response"""
     messages = state["messages"]
     
     if not llm:
-        # אם אין LLM, החזר את ההודעה האחרונה
+        # If no LLM, return last message
         return state
     
-    # הפעלת ה-LLM על כל ההודעות
+    # Run LLM on all messages
     response = await llm.ainvoke(messages)
     
     return {
@@ -129,20 +129,20 @@ async def llm_node(state: AgentState) -> AgentState:
         ]
     }
 
-# --- בניית הגרף ---
+# --- Build the graph ---
 def build_graph():
-    """בניית הגרף של LangGraph"""
+    """Build LangGraph graph"""
     workflow = StateGraph(AgentState)
     
-    # הוספת הצמתים
+    # Add nodes
     workflow.add_node("research", research_node)
     workflow.add_node("mcp", mcp_node)
     workflow.add_node("llm", llm_node)
     
-    # הגדרת נקודת התחלה
+    # Set entry point
     workflow.set_entry_point("research")
     
-    # הגדרת התנאים והמעברים
+    # Set conditions and transitions
     workflow.add_conditional_edges(
         "research",
         lambda state: "mcp" if state.get("mcp_tools") else "llm",
@@ -157,19 +157,19 @@ def build_graph():
     
     return workflow.compile()
 
-# --- יצירת האפליקציה ---
+# --- Create application ---
 app = build_graph()
 
-# --- הוספה ל-LangGraph Studio ---
+# --- Add to LangGraph Studio ---
 if __name__ == "__main__":
-    # הפעלת LangGraph Studio
+    # Run LangGraph Studio
     import langgraph
     langgraph.debug = True
     
     print("Starting LangGraph Studio...")
     print("Open http://localhost:8123 in your browser")
     
-    # הרצת הגרף עם דוגמה
+    # Run graph with example
     async def test_run():
         initial_state = {
             "messages": [{"role": "user", "content": "What is RAG?"}],
@@ -184,33 +184,7 @@ if __name__ == "__main__":
     asyncio.run(test_run())
 
 
-def extract_text_content(result) -> str:
-    """
-    מחלץ טקסט נקי מתוצאת MCP.
-    מטפל ב-TextContent, list של TextContent, או string רגיל.
-    """
-    # אם זה list (כמו בתמונה שהראית)
-    if isinstance(result, list):
-        texts = []
-        for item in result:
-            if hasattr(item, 'text'):
-                texts.append(item.text)
-            elif isinstance(item, str):
-                texts.append(item)
-        return "\n".join(texts) if texts else str(result)
-    
-    # אם זה TextContent אובייקט
-    if hasattr(result, 'text'):
-        return result.text
-    
-    # אם זה string
-    if isinstance(result, str):
-        return result
-    
-    # ברירת מחדל
-    return str(result)
-
-# --- צומת RAG (הסוכן הישן) ---
+# --- RAG Agent (legacy) ---
 async def rag_agent(state: AgentState):
     query = state['messages'][-1]['content']
     
@@ -256,26 +230,26 @@ async def rag_agent(state: AgentState):
     except Exception as e:
         return {"messages": [{"role": "assistant", "content": f"Sorry, I encountered an error while searching your documents: {str(e)}"}]}
 
-# --- צומת MCP (הסוכן החדש) ---
+# --- MCP Agent (new agent) ---
 async def mcp_agent(state: AgentState):
     mcp_tools = state.get('mcp_tools', {})
     query = state['messages'][-1]['content']
     
-    # בדיקה אם יש כלים זמינים
+    # Check if there are available tools
     if not mcp_tools:
         return {"messages": [{"role": "assistant", "content": "No MCP tools configured. Please configure MCP first in the MCP Settings page."}]}
 
     try:
-        # הסוכן בוחר איזה כלי להשתמש מתוך הרשימה
+        # Agent chooses which tool to use from the list
         available_tools = list(mcp_tools.keys())
         
-        # יצירת תיאור של הכלים לפרומפט
+        # Create description of tools for prompt
         tools_description = "\n".join([
             f"- {name}: {info['description']}"
             for name, info in mcp_tools.items()
         ])
         
-        # שאלת ה-LLM איזה כלי מתאים
+        # Ask LLM which tool is appropriate
         tool_selection_prompt = f"""You have these MCP tools available:
 {tools_description}
 
@@ -289,12 +263,12 @@ Tool name:"""
         selection_response = await llm.ainvoke(tool_selection_prompt) if llm else None
         selected_tool = selection_response.content.strip().lower() if selection_response else "none"
         
-        # אם אף כלי לא מתאים - חזור ל-RAG
+        # If no tool is suitable - return to RAG
         if selected_tool == "none" or selected_tool not in mcp_tools:
             # Fallback to RAG agent
             return await rag_agent(state)
         
-        # הרצת הכלי שנבחר
+        # Run the selected tool
         tool_info = mcp_tools[selected_tool]
         server_config = tool_info['server_config']
         
@@ -307,7 +281,7 @@ Tool name:"""
                 tool_args={"query": query}
             )
             
-            # עיבוד התוצאה
+            # Process the result
             clean_result = extract_text_content(result)
             
             return {"messages": [{"role": "assistant", "content": clean_result}]}
@@ -324,19 +298,19 @@ Tool name:"""
         # Fallback to RAG on any error
         return await rag_agent(state)
 
-# --- צומת החלטה ---
+# --- Decision Node ---
 def route_decision(state: AgentState):
     """
-    מחליט האם להשתמש ב-RAG או ב-MCP
+    Decide whether to use RAG or MCP
     """
     query = state['messages'][-1]['content']
     mcp_tools = state.get('mcp_tools', {})
     
-    # אם אין MCP מוגדר - תמיד לך ל-RAG
+    # If no MCP configured - always go to RAG
     if not mcp_tools:
         return "rag_agent"
     
-    # לוגיקה פשוטה לניתוב - אם יש מילות מפתח של external data נשתמש ב-MCP
+    # Simple routing logic - if there are external data keywords, use MCP
     external_keywords = ["weather", "time", "api", "external", "current", "today", "now"]
     query_lower = query.lower()
     
@@ -345,14 +319,14 @@ def route_decision(state: AgentState):
     else:
         return "rag_agent"
 
-# --- בניית הגרף ---
+# --- Build the graph ---
 workflow = StateGraph(AgentState)
 
-# הוספת הצמתים
+# Add the nodes
 workflow.add_node("rag_agent", rag_agent)
 workflow.add_node("mcp_agent", mcp_agent)
 
-# נקודת ההתחלה
+# Starting point
 workflow.set_conditional_entry_point(
     route_decision,
     {
@@ -361,9 +335,9 @@ workflow.set_conditional_entry_point(
     }
 )
 
-# סיום
+# End
 workflow.add_edge("rag_agent", END)
 workflow.add_edge("mcp_agent", END)
 
-# קומפילציה
+# Compile
 graph = workflow.compile()
